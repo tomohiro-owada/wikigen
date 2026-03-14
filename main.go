@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,13 +46,21 @@ func (p *Progress) done(name string) {
 
 func (p *Progress) print() {
 	done := int(atomic.LoadInt32(&p.doneItems))
-	fmt.Fprintf(os.Stderr, "\r\033[K[%d/%d] ", done, p.totalItems)
-	var parts []string
-	for name, status := range p.current {
-		parts = append(parts, fmt.Sprintf("%s: %s", name, status))
+	pct := 0
+	if p.totalItems > 0 {
+		pct = done * 100 / p.totalItems
 	}
-	if len(parts) > 0 {
-		fmt.Fprintf(os.Stderr, "%s", strings.Join(parts, " | "))
+	// Clear previous lines and reprint
+	lineCount := len(p.current) + 1
+	for i := 0; i < lineCount; i++ {
+		fmt.Fprintf(os.Stderr, "\033[2K") // clear line
+		if i < lineCount-1 {
+			fmt.Fprintf(os.Stderr, "\033[A") // move up
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\r── Progress: %d/%d wikis (%d%%) ──\n", done, p.totalItems, pct)
+	for name, status := range p.current {
+		fmt.Fprintf(os.Stderr, "  %s  %s\n", name, status)
 	}
 }
 
@@ -69,6 +79,43 @@ type WikiPage struct {
 type RepoEntry struct {
 	Project string // group name (empty = standalone)
 	Repo    string // owner/repo
+}
+
+// ── Input Validation ──
+
+var validRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
+
+func validateRepo(repo string) error {
+	if !validRepoPattern.MatchString(repo) {
+		return fmt.Errorf("invalid repo format: %q (expected owner/repo)", repo)
+	}
+	if strings.Contains(repo, "..") {
+		return fmt.Errorf("path traversal detected in repo: %q", repo)
+	}
+	if strings.ContainsAny(repo, ";&|`$(){}[]!~") {
+		return fmt.Errorf("invalid characters in repo: %q", repo)
+	}
+	return nil
+}
+
+// ── JSON Output ──
+
+type WikiResult struct {
+	Project    string           `json:"project"`
+	Repos      []string         `json:"repos"`
+	OutputDir  string           `json:"output_dir"`
+	Pages      []WikiPageResult `json:"pages"`
+	TotalPages int              `json:"total_pages"`
+	Failed     int              `json:"failed"`
+	Duration   string           `json:"duration"`
+	Status     string           `json:"status"`
+}
+
+type WikiPageResult struct {
+	Title    string `json:"title"`
+	Filename string `json:"filename"`
+	Size     int    `json:"size"`
+	Status   string `json:"status"`
 }
 
 // ── Claude CLI ──
@@ -431,7 +478,19 @@ func appendError(dir, msg string) {
 
 // ── Wiki Generation ──
 
-func generateWiki(claudePath, model string, projectName string, repos []string, token, language, outputDir, cloneDir string, pageParallel int, progress *Progress) error {
+func generateWiki(claudePath, model string, projectName string, repos []string, token, language, outputDir, cloneDir string, pageParallel int, dryRun bool, progress *Progress) (*WikiResult, error) {
+	result := &WikiResult{
+		Project: projectName,
+		Repos:   repos,
+		Status:  "running",
+	}
+
+	// Validate all repos
+	for _, repo := range repos {
+		if err := validateRepo(repo); err != nil {
+			return result, err
+		}
+	}
 
 	// Step 0: Clone all repositories
 	var repoDirs []string
@@ -443,7 +502,7 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 
 		parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(repoURL, "https://github.com/"), "https://gitlab.com/"), "/")
 		if len(parts) < 2 {
-			return fmt.Errorf("invalid repo format: %s", repo)
+			return result, fmt.Errorf("invalid repo format: %s", repo)
 		}
 		owner := parts[0]
 		repoName := strings.TrimSuffix(parts[1], ".git")
@@ -451,7 +510,7 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 		progress.set(projectName, fmt.Sprintf("📥 cloning %s/%s...", owner, repoName))
 		repoDir, _ := filepath.Abs(filepath.Join(cloneDir, fmt.Sprintf("%s_%s", owner, repoName)))
 		if err := gitClone(repoURL, token, repoDir); err != nil {
-			return fmt.Errorf("clone %s: %w", repo, err)
+			return result, fmt.Errorf("clone %s: %w", repo, err)
 		}
 		repoDirs = append(repoDirs, repoDir)
 	}
@@ -459,23 +518,25 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 	// Create output directory
 	wikiDir, _ := filepath.Abs(filepath.Join(outputDir, projectName))
 	if err := os.MkdirAll(wikiDir, 0755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+		return result, fmt.Errorf("mkdir: %w", err)
 	}
+	result.OutputDir = wikiDir
 
 	// Step 1: Determine wiki structure
 	progress.set(projectName, "📋 structure...")
 
 	structureContent, err := claudeCall(claudePath, model, repoDirs, xmlSystemPrompt, structurePrompt(projectName, repos, language), wikiDir)
 	if err != nil {
-		return fmt.Errorf("structure: %w", err)
+		return result, fmt.Errorf("structure: %w", err)
 	}
 	structureContent = cleanXMLResponse(structureContent)
 
 	pages := parsePages(structureContent)
 	if len(pages) == 0 {
-		return fmt.Errorf("no pages found in structure")
+		return result, fmt.Errorf("no pages found in structure")
 	}
 	log.Printf("[%s] Structure: %d pages", projectName, len(pages))
+	result.TotalPages = len(pages)
 
 	var allPages []WikiPage
 	for _, p := range pages {
@@ -484,6 +545,21 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 
 	// Write Home.md and _Sidebar.md immediately
 	writeHomeAndSidebar(wikiDir, projectName, structureContent, allPages, repos)
+
+	// Populate result with page info
+	for _, p := range allPages {
+		result.Pages = append(result.Pages, WikiPageResult{
+			Title: p.Title, Filename: p.Filename, Status: "pending",
+		})
+	}
+
+	// Dry run: stop after structure
+	if dryRun {
+		result.Status = "dry-run"
+		log.Printf("[%s] Dry run: %d pages planned in %s/", projectName, len(allPages), wikiDir)
+		progress.done(projectName)
+		return result, nil
+	}
 
 	// Step 2: Generate pages with parallelism
 	var pageDone int32
@@ -498,7 +574,8 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 			defer func() { <-pageSem }()
 
 			page := &allPages[idx]
-			progress.set(projectName, fmt.Sprintf("📝 %d/%d %s", atomic.LoadInt32(&pageDone)+1, len(allPages), page.Title))
+			pagePct := int(atomic.LoadInt32(&pageDone)) * 100 / len(allPages)
+			progress.set(projectName, fmt.Sprintf("📝 %d/%d (%d%%) %s", atomic.LoadInt32(&pageDone)+1, len(allPages), pagePct, page.Title))
 
 			filename := filepath.Join(wikiDir, page.Filename+".md")
 			maxRetries := 3
@@ -539,9 +616,25 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 	}
 	pageWg.Wait()
 
-	log.Printf("[%s] ✅ completed %s/ (%d pages)", projectName, wikiDir, len(allPages))
+	// Update result with final page statuses
+	var failedCount int
+	for i, p := range allPages {
+		fileInfo, err := os.Stat(filepath.Join(wikiDir, p.Filename+".md"))
+		if err != nil || fileInfo.Size() < 200 {
+			result.Pages[i].Status = "failed"
+			result.Pages[i].Size = 0
+			failedCount++
+		} else {
+			result.Pages[i].Status = "ok"
+			result.Pages[i].Size = int(fileInfo.Size())
+		}
+	}
+	result.Failed = failedCount
+	result.Status = "completed"
+
+	log.Printf("[%s] ✅ completed %s/ (%d pages, %d failed)", projectName, wikiDir, len(allPages), failedCount)
 	progress.done(projectName)
-	return nil
+	return result, nil
 }
 
 func writeHomeAndSidebar(wikiDir, projectName, structureContent string, allPages []WikiPage, repos []string) {
@@ -801,9 +894,13 @@ func main() {
 		logFile      string
 		claudePath   string
 		retryFailed  bool
+		dryRun       bool
+		outputJSON   bool
 	)
 
 	flag.BoolVar(&retryFailed, "retry", false, "retry only failed pages in existing wiki-output")
+	flag.BoolVar(&dryRun, "dry-run", false, "determine structure only, do not generate pages")
+	flag.BoolVar(&outputJSON, "json", false, "output results as JSON to stdout")
 	flag.StringVar(&reposFile, "f", "", "file containing repo list (one per line)")
 	flag.StringVar(&repos, "r", "", "comma-separated repo list (owner/repo or project:owner/repo)")
 	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub PAT (default: $GITHUB_TOKEN, empty=SSH)")
@@ -892,20 +989,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "🚀 Processing %d wikis (parallel: %d, pages: %d, model: %s)\n\n",
+	modeLabel := ""
+	if dryRun {
+		modeLabel = ", dry-run"
+	}
+	fmt.Fprintf(os.Stderr, "🚀 Processing %d wikis (parallel: %d, pages: %d, model: %s%s)\n\n",
 		len(tasks), parallel, pageParallel,
 		func() string {
 			if model != "" {
 				return model
 			}
 			return "default"
-		}())
+		}(), modeLabel)
 
 	progress := newProgress(len(tasks))
 	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var failed []string
+	var results []*WikiResult
 	start := time.Now()
 
 	for _, t := range tasks {
@@ -915,22 +1017,39 @@ func main() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := generateWiki(claudePath, model, t.name, t.repos, token, language, outputDir, cloneDir, pageParallel, progress); err != nil {
+			result, err := generateWiki(claudePath, model, t.name, t.repos, token, language, outputDir, cloneDir, pageParallel, dryRun, progress)
+			mu.Lock()
+			if err != nil {
 				log.Printf("[%s] ❌ %v", t.name, err)
 				progress.done(t.name)
-				mu.Lock()
 				failed = append(failed, t.name)
-				mu.Unlock()
+				if result != nil {
+					result.Status = "error"
+				}
 			}
+			if result != nil {
+				results = append(results, result)
+			}
+			mu.Unlock()
 		}(t)
 	}
 
 	wg.Wait()
 
 	elapsed := time.Since(start).Round(time.Second)
-	fmt.Fprintf(os.Stderr, "\n\n✨ Done in %s — %d/%d succeeded\n", elapsed, len(tasks)-len(failed), len(tasks))
-	if len(failed) > 0 {
-		fmt.Fprintf(os.Stderr, "❌ Failed: %s\n", strings.Join(failed, ", "))
+	for _, r := range results {
+		r.Duration = elapsed.String()
 	}
-	fmt.Fprintf(os.Stderr, "📁 Output: %s\n", outputDir)
+
+	if outputJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(results)
+	} else {
+		fmt.Fprintf(os.Stderr, "\n\n✨ Done in %s — %d/%d succeeded\n", elapsed, len(tasks)-len(failed), len(tasks))
+		if len(failed) > 0 {
+			fmt.Fprintf(os.Stderr, "❌ Failed: %s\n", strings.Join(failed, ", "))
+		}
+		fmt.Fprintf(os.Stderr, "📁 Output: %s\n", outputDir)
+	}
 }
