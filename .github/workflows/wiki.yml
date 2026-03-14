@@ -37,7 +37,8 @@ jobs:
       - name: Generate wiki
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: ./wikigen -lang en -pp 3 -model haiku tomohiro-owada/wikigen
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./wikigen -lang en -pp 3 -model haiku -token "$GITHUB_TOKEN" tomohiro-owada/wikigen
 
       - name: Push to wiki
         env:
