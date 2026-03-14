@@ -26,37 +26,26 @@ jobs:
       - name: Build wikigen
         run: go build -o wikigen .
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Claude CLI
-        run: npm install -g @anthropic-ai/claude-code
-
       - name: Generate wiki
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./wikigen -lang en -pp 3 -model haiku -token "$GITHUB_TOKEN" tomohiro-owada/wikigen
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Run the wikigen tool to generate wiki documentation for this repository.
 
-      - name: Push to wiki
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git clone https://x-access-token:${GITHUB_TOKEN}@github.com/tomohiro-owada/wikigen.wiki.git wiki-repo 2>/dev/null || {
-            echo "::warning::Wiki not initialized. Enable Wiki in repo settings and create an initial page."
-            exit 0
-          }
-          cp -r wiki-output/wikigen/* wiki-repo/
-          cd wiki-repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --staged --quiet; then
-            echo "No wiki changes"
-          else
-            git commit -m "Update wiki ($(date -u +%Y-%m-%d))"
-            git push
-            echo "Wiki updated successfully"
-          fi
+            1. Run this command:
+            ```bash
+            GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ./wikigen -lang en -pp 3 -model haiku -token "${{ secrets.GITHUB_TOKEN }}" tomohiro-owada/wikigen
+            ```
+
+            2. After wikigen finishes, push the generated wiki to GitHub Wiki:
+            ```bash
+            git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/tomohiro-owada/wikigen.wiki.git wiki-repo
+            cp -r wiki-output/wikigen/* wiki-repo/
+            cd wiki-repo
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git diff --staged --quiet || (git commit -m "Update wiki ($(date -u +%Y-%m-%d))" && git push)
+            ```
+          claude_args: "--dangerously-skip-permissions --model haiku --max-turns 30"
