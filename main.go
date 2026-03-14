@@ -645,6 +645,144 @@ func loadEnvFile() {
 	}
 }
 
+// ── Retry Failed ──
+
+func retryFailedPages(claudePath, model, language, outputDir, cloneDir string, pageParallel int) {
+	outputDir, _ = filepath.Abs(outputDir)
+	cloneDir, _ = filepath.Abs(cloneDir)
+
+	// Scan wiki-output for project directories
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		log.Fatalf("Cannot read output dir %s: %v", outputDir, err)
+	}
+
+	var failedFiles []struct {
+		projectDir string
+		filename   string
+		title      string
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		projectDir := filepath.Join(outputDir, entry.Name())
+		files, _ := os.ReadDir(projectDir)
+		for _, f := range files {
+			if !strings.HasSuffix(f.Name(), ".md") || f.Name() == "Home.md" || f.Name() == "_Sidebar.md" {
+				continue
+			}
+			content, err := os.ReadFile(filepath.Join(projectDir, f.Name()))
+			if err != nil {
+				continue
+			}
+			if strings.Contains(string(content), "Content generation failed") || len(content) < 200 {
+				title := strings.TrimSuffix(f.Name(), ".md")
+				failedFiles = append(failedFiles, struct {
+					projectDir string
+					filename   string
+					title      string
+				}{projectDir, strings.TrimSuffix(f.Name(), ".md"), title})
+			}
+		}
+	}
+
+	if len(failedFiles) == 0 {
+		fmt.Fprintln(os.Stderr, "✅ No failed pages found")
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "🔄 Found %d failed pages to retry\n\n", len(failedFiles))
+
+	// Group by project
+	projectFiles := make(map[string][]struct{ filename, title string })
+	for _, f := range failedFiles {
+		projectFiles[f.projectDir] = append(projectFiles[f.projectDir], struct{ filename, title string }{f.filename, f.title})
+	}
+
+	for projectDir, pages := range projectFiles {
+		projectName := filepath.Base(projectDir)
+
+		// Find cloned repo dirs for this project
+		var repoDirs []string
+		cloneEntries, _ := os.ReadDir(cloneDir)
+		for _, ce := range cloneEntries {
+			if ce.IsDir() {
+				repoDirs = append(repoDirs, filepath.Join(cloneDir, ce.Name()))
+			}
+		}
+
+		// Read Home.md to get page descriptions
+		homeContent, _ := os.ReadFile(filepath.Join(projectDir, "Home.md"))
+		homeStr := string(homeContent)
+
+		for _, page := range pages {
+			fmt.Fprintf(os.Stderr, "  🔄 [%s] %s\n", projectName, page.title)
+
+			// Extract description from Home.md
+			desc := ""
+			for _, line := range strings.Split(homeStr, "\n") {
+				if strings.Contains(line, fmt.Sprintf("[%s]", page.title)) || strings.Contains(line, fmt.Sprintf("(%s)", page.filename)) {
+					if idx := strings.Index(line, "— "); idx != -1 {
+						desc = line[idx+len("— "):]
+					}
+					break
+				}
+			}
+
+			wp := WikiPage{
+				ID:          page.filename,
+				Title:       page.title,
+				Filename:    page.filename,
+				Description: desc,
+			}
+
+			// Build minimal allPages from Home.md for cross-linking
+			var allPages []WikiPage
+			for _, line := range strings.Split(homeStr, "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "- [") {
+					// Parse: - [Title](Filename) — Description
+					if tStart := strings.Index(line, "["); tStart != -1 {
+						if tEnd := strings.Index(line[tStart:], "]"); tEnd != -1 {
+							t := line[tStart+1 : tStart+tEnd]
+							if fStart := strings.Index(line, "("); fStart != -1 {
+								if fEnd := strings.Index(line[fStart:], ")"); fEnd != -1 {
+									fn := line[fStart+1 : fStart+fEnd]
+									d := ""
+									if dIdx := strings.Index(line, "— "); dIdx != -1 {
+										d = line[dIdx+len("— "):]
+									}
+									allPages = append(allPages, WikiPage{ID: fn, Title: t, Filename: fn, Description: d})
+								}
+							}
+						}
+					}
+				}
+			}
+
+			repos := []string{projectName}
+
+			os.Remove(filepath.Join(projectDir, page.filename+".md"))
+
+			_, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(wp, allPages, projectName, repos, language), projectDir)
+			if err != nil {
+				log.Printf("[%s] retry %s failed: %v", projectName, page.title, err)
+				continue
+			}
+
+			written, readErr := os.ReadFile(filepath.Join(projectDir, page.filename+".md"))
+			if readErr != nil || len(written) < 100 {
+				log.Printf("[%s] retry %s: file still not written", projectName, page.title)
+			} else {
+				fmt.Fprintf(os.Stderr, "  ✅ [%s] %s (%d chars)\n", projectName, page.title, len(written))
+			}
+		}
+	}
+
+	fmt.Fprintln(os.Stderr, "\n✨ Retry complete")
+}
+
 // ── Main ──
 
 func main() {
@@ -662,8 +800,10 @@ func main() {
 		pageParallel int
 		logFile      string
 		claudePath   string
+		retryFailed  bool
 	)
 
+	flag.BoolVar(&retryFailed, "retry", false, "retry only failed pages in existing wiki-output")
 	flag.StringVar(&reposFile, "f", "", "file containing repo list (one per line)")
 	flag.StringVar(&repos, "r", "", "comma-separated repo list (owner/repo or project:owner/repo)")
 	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub PAT (default: $GITHUB_TOKEN, empty=SSH)")
@@ -693,6 +833,12 @@ func main() {
 	if _, err := exec.LookPath(claudePath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: claude CLI not found. Install from https://claude.ai/claude-code\n")
 		os.Exit(1)
+	}
+
+	// Retry mode: find and regenerate failed pages
+	if retryFailed {
+		retryFailedPages(claudePath, model, language, outputDir, cloneDir, pageParallel)
+		return
 	}
 
 	// Collect all lines
