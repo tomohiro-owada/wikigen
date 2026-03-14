@@ -101,16 +101,7 @@ func claudeCall(claudePath, model string, repoDirs []string, systemPrompt, promp
 
 // ── Git Clone ──
 
-func getGHToken() string {
-	cmd := exec.Command("gh", "auth", "token")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func gitClone(repoURL, token, destDir string, useGH bool) error {
+func gitClone(repoURL, token, destDir string) error {
 	if _, err := os.Stat(filepath.Join(destDir, ".git")); err == nil {
 		cmd := exec.Command("git", "-C", destDir, "pull", "--ff-only")
 		cmd.Stdout = os.Stderr
@@ -118,10 +109,16 @@ func gitClone(repoURL, token, destDir string, useGH bool) error {
 		return cmd.Run()
 	}
 
-	// Always use SSH
-	cloneURL := strings.Replace(repoURL, "https://github.com/", "git@github.com:", 1)
-	if !strings.HasSuffix(cloneURL, ".git") {
-		cloneURL += ".git"
+	cloneURL := repoURL
+	if token != "" {
+		// PAT specified — use HTTPS with token
+		cloneURL = strings.Replace(repoURL, "https://", fmt.Sprintf("https://%s@", token), 1)
+	} else {
+		// No PAT — use SSH
+		cloneURL = strings.Replace(repoURL, "https://github.com/", "git@github.com:", 1)
+		if !strings.HasSuffix(cloneURL, ".git") {
+			cloneURL += ".git"
+		}
 	}
 
 	cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", cloneURL, destDir)
@@ -422,7 +419,7 @@ func appendError(dir, msg string) {
 
 // ── Wiki Generation ──
 
-func generateWiki(claudePath, model string, projectName string, repos []string, token, language, outputDir, cloneDir string, pageParallel int, useGH bool, progress *Progress) error {
+func generateWiki(claudePath, model string, projectName string, repos []string, token, language, outputDir, cloneDir string, pageParallel int, progress *Progress) error {
 
 	// Step 0: Clone all repositories
 	var repoDirs []string
@@ -441,7 +438,7 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 
 		progress.set(projectName, fmt.Sprintf("📥 cloning %s/%s...", owner, repoName))
 		repoDir := filepath.Join(cloneDir, fmt.Sprintf("%s_%s", owner, repoName))
-		if err := gitClone(repoURL, token, repoDir, useGH); err != nil {
+		if err := gitClone(repoURL, token, repoDir); err != nil {
 			return fmt.Errorf("clone %s: %w", repo, err)
 		}
 		repoDirs = append(repoDirs, repoDir)
@@ -635,12 +632,11 @@ func main() {
 		pageParallel int
 		logFile      string
 		claudePath   string
-		useGH        bool
 	)
 
 	flag.StringVar(&reposFile, "f", "", "file containing repo list (one per line)")
 	flag.StringVar(&repos, "r", "", "comma-separated repo list (owner/repo or project:owner/repo)")
-	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub PAT (default: $GITHUB_TOKEN)")
+	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub PAT (default: $GITHUB_TOKEN, empty=SSH)")
 	flag.StringVar(&model, "model", envOrDefault("CLAUDE_MODEL", ""), "claude model (e.g., haiku, sonnet, opus)")
 	flag.StringVar(&language, "lang", envOrDefault("WIKI_LANGUAGE", "ja"), "output language")
 	flag.StringVar(&outputDir, "o", envOrDefault("WIKI_OUTPUT_DIR", "./wiki-output"), "output directory")
@@ -648,7 +644,6 @@ func main() {
 	flag.StringVar(&claudePath, "claude", "claude", "path to claude binary")
 	flag.IntVar(&parallel, "p", envOrDefaultInt("WIKI_PARALLEL", 1), "parallel projects/repos")
 	flag.IntVar(&pageParallel, "pp", envOrDefaultInt("WIKI_PAGE_PARALLEL", 3), "parallel pages per project")
-	flag.BoolVar(&useGH, "gh", envOrDefaultBool("WIKI_USE_GH", false), "use gh CLI for cloning")
 	flag.StringVar(&logFile, "log", "", "log file path (default: stderr)")
 	flag.Parse()
 
@@ -744,7 +739,7 @@ func main() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := generateWiki(claudePath, model, t.name, t.repos, token, language, outputDir, cloneDir, pageParallel, useGH, progress); err != nil {
+			if err := generateWiki(claudePath, model, t.name, t.repos, token, language, outputDir, cloneDir, pageParallel, progress); err != nil {
 				log.Printf("[%s] ❌ %v", t.name, err)
 				progress.done(t.name)
 				mu.Lock()
