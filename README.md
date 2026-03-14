@@ -109,6 +109,7 @@ git add -A && git commit -m "Update wiki" && git push
 | `-pp` | `WIKI_PAGE_PARALLEL` | `3` | ページ並列数（リポジトリごと） |
 | `-lang` | `WIKI_LANGUAGE` | `ja` | 出力言語 |
 | `-log` | - | stderr | ログファイルパス |
+| `-retry` | - | false | 失敗ページのみ再生成 |
 
 ## 認証
 
@@ -116,6 +117,16 @@ git add -A && git commit -m "Update wiki" && git push
 |---|---|---|
 | SSH | `git` のSSH鍵設定済み | デフォルト。PAT不要 |
 | PAT | `.env` に `GITHUB_TOKEN` を設定 | SSH未設定の環境向け |
+
+## 失敗ページのリトライ
+
+生成に失敗したページだけを再生成できます。
+
+```bash
+./wikigen -retry
+```
+
+`wiki-output/` 内の `*Content generation failed*` を含むページと 200 バイト未満のページを検出し、既存のクローン済みリポジトリを使って再生成します。自動リトライ（最大3回）でも失敗した場合に使用してください。
 
 ## ドキュメント生成方針
 
