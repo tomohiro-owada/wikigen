@@ -304,16 +304,21 @@ When referencing other pages, use GitHub Wiki link format: [Page Title](Page-Fil
 - Pure speculation: NEVER include — omit entirely without mentioning the absence
 - Be thorough — this is production-grade documentation
 
-## Format Rules (CRITICAL — VIOLATION WILL INVALIDATE THE OUTPUT)
-- Output ONLY the wiki page content in Markdown
-- ABSOLUTELY NO preamble, summary, or commentary before or after the content
-- Do NOT write things like "I've completed...", "Here's the wiki...", "This page covers..."
-- Do NOT explain what you did or summarize the output
-- First line should be a brief intro paragraph (# heading added automatically)
+## Output Instructions (CRITICAL)
+- Use the Write tool to write the wiki page content to the file: %s.md
+- The file content MUST start with: # %s
+- Then a blank line, then the intro paragraph, then the rest of the content
 - Use ## for major sections, ### for subsections
 - End with a "Related Pages" section
-- The output will be saved directly to a .md file — anything that isn't wiki content will pollute the file
-`, projectName, repoList, page.Title, page.Description, langName, pageList.String())
+- Do NOT output the wiki content to stdout — ONLY write it to the file
+- Do NOT include any commentary, summary, or explanation in the file
+
+## Writing Style
+- Use formal, neutral technical language — NO dialects, slang, or personality quirks
+- Write in standard, professional %s
+- Do NOT use casual expressions, colloquialisms, or character-like speech patterns
+- The documentation should read like an official technical manual
+`, projectName, repoList, page.Title, page.Description, langName, pageList.String(), page.Filename, page.Title, langName)
 }
 
 func languageName(code string) string {
@@ -495,23 +500,24 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 			page := &allPages[idx]
 			progress.set(projectName, fmt.Sprintf("📝 %d/%d %s", atomic.LoadInt32(&pageDone)+1, len(allPages), page.Title))
 
-			content, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(*page, allPages, projectName, repos, language), wikiDir)
+			_, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(*page, allPages, projectName, repos, language), wikiDir)
 			if err != nil {
 				log.Printf("[%s] page %s failed: %v", projectName, page.Title, err)
-				content = fmt.Sprintf("*Content generation failed: %v*", err)
 				appendError(wikiDir, fmt.Sprintf("Page %d/%d: %s — %v", idx+1, len(allPages), page.Title, err))
 			}
 
-			page.Content = content
-
+			// Read the file that claude wrote
 			filename := filepath.Join(wikiDir, page.Filename+".md")
-			fileContent := fmt.Sprintf("# %s\n\n%s\n", page.Title, page.Content)
-			if err := os.WriteFile(filename, []byte(fileContent), 0644); err != nil {
-				appendError(wikiDir, fmt.Sprintf("Page %d/%d: %s — write failed: %v", idx+1, len(allPages), page.Title, err))
+			written, readErr := os.ReadFile(filename)
+			if readErr != nil || len(written) == 0 {
+				// Claude didn't write the file — fall back to empty
+				appendError(wikiDir, fmt.Sprintf("Page %d/%d: %s — file not written by claude", idx+1, len(allPages), page.Title))
+				os.WriteFile(filename, []byte(fmt.Sprintf("# %s\n\n*Content generation failed*\n", page.Title)), 0644)
 			}
+			page.Content = string(written)
 
 			done := atomic.AddInt32(&pageDone, 1)
-			log.Printf("[%s] Page %d/%d saved: %s (%d chars)", projectName, done, len(allPages), page.Title, len(content))
+			log.Printf("[%s] Page %d/%d saved: %s (%d chars)", projectName, done, len(allPages), page.Title, len(page.Content))
 		}(i)
 	}
 	pageWg.Wait()
