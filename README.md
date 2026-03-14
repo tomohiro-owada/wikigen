@@ -205,6 +205,78 @@ Page count is dynamically determined based on repository complexity.
 
 Nothing is generated without code evidence. No speculation.
 
+### GitHub Actions — Auto-update Wiki on Push
+
+Automatically regenerate your GitHub Wiki whenever source code changes.
+
+#### Setup
+
+1. **Enable Wiki** in your repository settings (Settings → Features → Wiki)
+2. **Create an initial Wiki page** via the Wiki tab (this initializes `.wiki.git`)
+3. **Generate an OAuth token**:
+   ```bash
+   claude setup-token
+   ```
+4. **Add the token to Secrets**: Settings → Secrets → Actions → `CLAUDE_CODE_OAUTH_TOKEN`
+5. **Add the workflow** `.github/workflows/wiki.yml`:
+
+```yaml
+name: Generate Wiki
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '*.go'        # Adjust to your source files
+      - 'go.mod'
+
+permissions:
+  contents: write
+
+jobs:
+  wiki:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build wikigen
+        run: go build -o wikigen .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Generate wiki
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: ./wikigen -lang en -pp 3 -model haiku -token "${{ secrets.GITHUB_TOKEN }}" owner/repo
+
+      - name: Push to wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone https://x-access-token:${GITHUB_TOKEN}@github.com/owner/repo.wiki.git wiki-repo
+          cp -r wiki-output/repo/* wiki-repo/
+          cd wiki-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet || (git commit -m "Update wiki" && git push)
+```
+
+Replace `owner/repo` with your repository. The wiki auto-updates on every push to `main` that changes source files, or can be triggered manually from the Actions tab.
+
+> **Note**: The OAuth token expires after approximately 1 year. Use `claude setup-token` to regenerate when needed. Alternatively, use `ANTHROPIC_API_KEY` for stable long-term usage (API billing applies).
+
 ### Acknowledgements
 
 This project was inspired by [DeepWiki-Open](https://github.com/AsyncFuncAI/deepwiki-open), an AI-powered wiki generator that uses RAG and embedding for documentation generation. wikigen takes a different approach — replacing the RAG/embedding pipeline with Claude Code's native tool use (Read, Grep, Glob, Bash) for direct source code access, eliminating the need for Docker, Ollama, or any embedding infrastructure.
@@ -411,10 +483,29 @@ git add -A && git commit -m "Update wiki" && git push
 
 コードに根拠がないものは生成しません。推測は一切行いません。
 
+### GitHub Actions — Push 時に Wiki を自動更新
+
+ソースコード変更時に GitHub Wiki を自動再生成できます。
+
+#### セットアップ
+
+1. **Wiki を有効化** — リポジトリの Settings → Features → Wiki
+2. **初期ページを作成** — Wiki タブから手動で1ページ作成（`.wiki.git` の初期化に必要）
+3. **OAuth トークンを生成**:
+   ```bash
+   claude setup-token
+   ```
+4. **Secrets にトークンを追加** — Settings → Secrets → Actions → `CLAUDE_CODE_OAUTH_TOKEN`
+5. **ワークフロー `.github/workflows/wiki.yml` を追加**（英語セクションの YAML 例を参照）
+
+Push 時に自動実行、または Actions タブから手動実行できます。
+
+> **注意**: OAuth トークンの有効期限は約1年です。`claude setup-token` で再生成してください。安定運用には `ANTHROPIC_API_KEY`（API課金）も使用できます。
+
 ### 謝辞
 
 本プロジェクトは [DeepWiki-Open](https://github.com/AsyncFuncAI/deepwiki-open)（RAG と embedding を用いた AI Wiki ジェネレーター）にインスパイアされて開発しました。wikigen は RAG/embedding パイプラインを Claude Code のネイティブツール（Read, Grep, Glob, Bash）による直接的なソースコードアクセスに置き換えることで、Docker・Ollama・embedding インフラを不要にしています。
 
 ### Claude Code 連携
 
-`SKILL.md` スキルファイルを同梱。wikigen ディレクトリで作業中の Claude Code が使い方とベストプラクティスを自動参照できます。
+`.claude/skills/wikigen/SKILL.md` スキルファイルを同梱。wikigen ディレクトリで作業中の Claude Code が使い方とベストプラクティスを自動参照できます。
