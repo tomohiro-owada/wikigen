@@ -471,7 +471,7 @@ func appendError(dir, msg string) {
 
 // ── Wiki Generation ──
 
-func generateWiki(claudePath, model string, projectName string, repos []string, token, language, outputDir, cloneDir string, pageParallel int, dryRun bool, progress *Progress) (*WikiResult, error) {
+func generateWiki(claudePath, model string, projectName string, repos []string, token, language, outputDir, cloneDir string, pageParallel int, dryRun bool, localDir string, progress *Progress) (*WikiResult, error) {
 	result := &WikiResult{
 		Project: projectName,
 		Repos:   repos,
@@ -485,27 +485,33 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 		}
 	}
 
-	// Step 0: Clone all repositories
+	// Step 0: Get repository code
 	var repoDirs []string
-	for _, repo := range repos {
-		repoURL := repo
-		if !strings.HasPrefix(repo, "http") {
-			repoURL = fmt.Sprintf("https://github.com/%s", repo)
-		}
+	if localDir != "" {
+		// Use local directory directly (no clone needed)
+		absLocal, _ := filepath.Abs(localDir)
+		repoDirs = append(repoDirs, absLocal)
+	} else {
+		for _, repo := range repos {
+			repoURL := repo
+			if !strings.HasPrefix(repo, "http") {
+				repoURL = fmt.Sprintf("https://github.com/%s", repo)
+			}
 
-		parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(repoURL, "https://github.com/"), "https://gitlab.com/"), "/")
-		if len(parts) < 2 {
-			return result, fmt.Errorf("invalid repo format: %s", repo)
-		}
-		owner := parts[0]
-		repoName := strings.TrimSuffix(parts[1], ".git")
+			parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(repoURL, "https://github.com/"), "https://gitlab.com/"), "/")
+			if len(parts) < 2 {
+				return result, fmt.Errorf("invalid repo format: %s", repo)
+			}
+			owner := parts[0]
+			repoName := strings.TrimSuffix(parts[1], ".git")
 
-		progress.set(projectName, fmt.Sprintf("📥 cloning %s/%s...", owner, repoName))
-		repoDir, _ := filepath.Abs(filepath.Join(cloneDir, fmt.Sprintf("%s_%s", owner, repoName)))
-		if err := gitClone(repoURL, token, repoDir); err != nil {
-			return result, fmt.Errorf("clone %s: %w", repo, err)
+			progress.set(projectName, fmt.Sprintf("📥 cloning %s/%s...", owner, repoName))
+			repoDir, _ := filepath.Abs(filepath.Join(cloneDir, fmt.Sprintf("%s_%s", owner, repoName)))
+			if err := gitClone(repoURL, token, repoDir); err != nil {
+				return result, fmt.Errorf("clone %s: %w", repo, err)
+			}
+			repoDirs = append(repoDirs, repoDir)
 		}
-		repoDirs = append(repoDirs, repoDir)
 	}
 
 	// Create output directory
@@ -888,11 +894,13 @@ func main() {
 		retryFailed  bool
 		dryRun       bool
 		outputJSON   bool
+		localDir     string
 	)
 
 	flag.BoolVar(&retryFailed, "retry", false, "retry only failed pages in existing wiki-output")
 	flag.BoolVar(&dryRun, "dry-run", false, "determine structure only, do not generate pages")
 	flag.BoolVar(&outputJSON, "json", false, "output results as JSON to stdout")
+	flag.StringVar(&localDir, "local", "", "use local directory instead of cloning (skip git clone)")
 	flag.StringVar(&reposFile, "f", "", "file containing repo list (one per line)")
 	flag.StringVar(&repos, "r", "", "comma-separated repo list (owner/repo or project:owner/repo)")
 	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub PAT (default: $GITHUB_TOKEN, empty=SSH)")
@@ -1009,7 +1017,7 @@ func main() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			result, err := generateWiki(claudePath, model, t.name, t.repos, token, language, outputDir, cloneDir, pageParallel, dryRun, progress)
+			result, err := generateWiki(claudePath, model, t.name, t.repos, token, language, outputDir, cloneDir, pageParallel, dryRun, localDir, progress)
 			mu.Lock()
 			if err != nil {
 				log.Printf("[%s] ❌ %v", t.name, err)
