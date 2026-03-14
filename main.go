@@ -500,21 +500,38 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 			page := &allPages[idx]
 			progress.set(projectName, fmt.Sprintf("📝 %d/%d %s", atomic.LoadInt32(&pageDone)+1, len(allPages), page.Title))
 
-			_, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(*page, allPages, projectName, repos, language), wikiDir)
-			if err != nil {
-				log.Printf("[%s] page %s failed: %v", projectName, page.Title, err)
-				appendError(wikiDir, fmt.Sprintf("Page %d/%d: %s — %v", idx+1, len(allPages), page.Title, err))
+			filename := filepath.Join(wikiDir, page.Filename+".md")
+			maxRetries := 3
+			var success bool
+
+			for attempt := 1; attempt <= maxRetries; attempt++ {
+				if attempt > 1 {
+					progress.set(projectName, fmt.Sprintf("🔄 %d/%d %s (retry %d)", idx+1, len(allPages), page.Title, attempt))
+					log.Printf("[%s] Retrying page %s (attempt %d/%d)", projectName, page.Title, attempt, maxRetries)
+				}
+
+				// Remove previous failed file
+				os.Remove(filename)
+
+				_, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(*page, allPages, projectName, repos, language), wikiDir)
+				if err != nil {
+					log.Printf("[%s] page %s attempt %d failed: %v", projectName, page.Title, attempt, err)
+					continue
+				}
+
+				// Check if claude wrote the file
+				written, readErr := os.ReadFile(filename)
+				if readErr == nil && len(written) > 100 {
+					page.Content = string(written)
+					success = true
+					break
+				}
 			}
 
-			// Read the file that claude wrote
-			filename := filepath.Join(wikiDir, page.Filename+".md")
-			written, readErr := os.ReadFile(filename)
-			if readErr != nil || len(written) == 0 {
-				// Claude didn't write the file — fall back to empty
-				appendError(wikiDir, fmt.Sprintf("Page %d/%d: %s — file not written by claude", idx+1, len(allPages), page.Title))
-				os.WriteFile(filename, []byte(fmt.Sprintf("# %s\n\n*Content generation failed*\n", page.Title)), 0644)
+			if !success {
+				appendError(wikiDir, fmt.Sprintf("Page %d/%d: %s — failed after %d attempts", idx+1, len(allPages), page.Title, maxRetries))
+				os.WriteFile(filename, []byte(fmt.Sprintf("# %s\n\n*Content generation failed after %d attempts*\n", page.Title, maxRetries)), 0644)
 			}
-			page.Content = string(written)
 
 			done := atomic.AddInt32(&pageDone, 1)
 			log.Printf("[%s] Page %d/%d saved: %s (%d chars)", projectName, done, len(allPages), page.Title, len(page.Content))
