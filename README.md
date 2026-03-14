@@ -1,10 +1,154 @@
 # wikigen
 
-GitHub リポジトリのソースコードから自動で Wiki (Markdown) を生成する Go ワンバイナリ CLI。
+A single Go binary CLI that generates GitHub Wiki from source code using Claude Code.
 
-Claude Code (`claude -p`) がリポジトリのコードを直接読み、GitHub Wiki 互換のドキュメントを生成します。
+Claude Code (`claude -p`) reads the repository code directly and generates GitHub Wiki-compatible documentation.
 
-## アーキテクチャ
+---
+
+**[日本語](#日本語)** | **[English](#english)**
+
+---
+
+## English
+
+### Architecture
+
+```
+wikigen → git clone (SSH) → claude -p --add-dir ./repo
+                                 │
+                                 ├── Read (source code)
+                                 ├── Grep (pattern search)
+                                 ├── Glob (file discovery)
+                                 ├── Bash (git log, etc.)
+                                 └── Write (.md files directly)
+```
+
+No Docker, Ollama, or embedding required.
+
+### Prerequisites
+
+- Go 1.22+
+- git (SSH key configured, or PAT)
+- `claude` CLI installed and authenticated
+
+### Setup
+
+```bash
+git clone https://github.com/tomohiro-owada/wikigen.git
+cd wikigen
+cp .env.example .env
+# Edit .env as needed
+go build -o wikigen .
+```
+
+### Usage
+
+```bash
+# Single repository
+./wikigen owner/repo
+
+# Multiple repositories
+./wikigen owner/repo1 owner/repo2
+
+# Batch from file
+./wikigen -f repos.txt
+
+# Repo-level + page-level parallelism
+./wikigen -f repos.txt -p 2 -pp 5
+
+# Specify model
+./wikigen -f repos.txt -model haiku
+
+# Generate in English
+./wikigen -f repos.txt -lang en
+
+# Retry failed pages only
+./wikigen -retry
+```
+
+### repos.txt Format
+
+```
+# Standalone wiki (one wiki per repo)
+owner/repo1
+owner/repo2
+
+# Multi-repo wiki (multiple repos merged into one wiki)
+myproject:owner/frontend-repo
+myproject:owner/backend-repo
+myproject:owner/shared-repo
+```
+
+### Output Format
+
+Outputs GitHub Wiki-compatible directory structure. Push directly to `{repo}.wiki.git`.
+
+```
+wiki-output/{project}/
+  Home.md
+  _Sidebar.md
+  System-Architecture.md
+  API-Specification.md
+  Data-Model.md
+  ...
+  _errors.log          # Created only if errors occurred
+```
+
+#### Push to GitHub Wiki
+
+```bash
+git clone git@github.com:owner/repo.wiki.git
+cp -r wiki-output/repo/* repo.wiki/
+cd repo.wiki
+git add -A && git commit -m "Update wiki" && git push
+```
+
+### Options
+
+All options can also be set via `.env`. CLI flags take precedence.
+
+| Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `-f` | - | - | Repository list file |
+| `-r` | - | - | Comma-separated repos |
+| `-token` | `GITHUB_TOKEN` | (empty=SSH) | GitHub PAT. If empty, SSH is used |
+| `-model` | `CLAUDE_MODEL` | - | Claude model (haiku, sonnet, opus) |
+| `-o` | `WIKI_OUTPUT_DIR` | `./wiki-output` | Output directory |
+| `-clone-dir` | `WIKI_CLONE_DIR` | `./.repos` | Clone directory |
+| `-p` | `WIKI_PARALLEL` | `1` | Parallel repos |
+| `-pp` | `WIKI_PAGE_PARALLEL` | `3` | Parallel pages per repo |
+| `-lang` | `WIKI_LANGUAGE` | `ja` | Output language |
+| `-log` | - | stderr | Log file path |
+| `-retry` | - | false | Retry failed pages only |
+
+### Authentication
+
+| Method | Config | Use Case |
+|---|---|---|
+| SSH | SSH key registered with GitHub | Default. No PAT needed |
+| PAT | Set `GITHUB_TOKEN` in `.env` | For environments without SSH |
+
+### Documentation Policy
+
+Generates documentation from the following categories based on actual source code.
+Page count is dynamically determined based on repository size.
+
+#### A. Factual (directly from code)
+- System overview, architecture, API specs, data models
+- Routing, state management, component catalog
+- Config, build/deploy, testing, auth, error handling, integrations
+
+#### B. High-confidence inference (from code patterns)
+- Processing flows, security design, performance considerations
+
+Nothing is generated without code evidence.
+
+---
+
+## 日本語
+
+### アーキテクチャ
 
 ```
 wikigen → git clone (SSH) → claude -p --add-dir ./repo
@@ -18,23 +162,23 @@ wikigen → git clone (SSH) → claude -p --add-dir ./repo
 
 Docker、Ollama、embedding 一切不要。
 
-## 前提条件
+### 前提条件
 
 - Go 1.22+
 - git（SSH認証設定済み、または PAT）
 - `claude` CLI がインストール・認証済み
 
-## セットアップ
+### セットアップ
 
 ```bash
-git clone git@github.com:tomohiro-owada/wikigen.git
+git clone https://github.com/tomohiro-owada/wikigen.git
 cd wikigen
 cp .env.example .env
 # 必要に応じて .env を編集
 go build -o wikigen .
 ```
 
-## 使い方
+### 使い方
 
 ```bash
 # 単一リポジトリ
@@ -54,9 +198,12 @@ go build -o wikigen .
 
 # 英語で生成
 ./wikigen -f repos.txt -lang en
+
+# 失敗ページのリトライ
+./wikigen -retry
 ```
 
-## repos.txt の書式
+### repos.txt の書式
 
 ```
 # 単独wiki（リポジトリごとに1つのwiki）
@@ -69,7 +216,7 @@ myproject:owner/backend-repo
 myproject:owner/shared-repo
 ```
 
-## 出力形式
+### 出力形式
 
 GitHub Wiki 互換のディレクトリ構成で出力されます。`{repo}.wiki.git` にそのまま push 可能。
 
@@ -84,7 +231,7 @@ wiki-output/{project}/
   _errors.log       ← エラーがあった場合のみ作成
 ```
 
-### GitHub Wiki への push
+#### GitHub Wiki への push
 
 ```bash
 git clone git@github.com:owner/repo.wiki.git
@@ -93,7 +240,7 @@ cd repo.wiki
 git add -A && git commit -m "Update wiki" && git push
 ```
 
-## オプション
+### オプション
 
 全てのオプションは `.env` でも設定可能です。コマンドラインフラグが優先されます。
 
@@ -111,14 +258,14 @@ git add -A && git commit -m "Update wiki" && git push
 | `-log` | - | stderr | ログファイルパス |
 | `-retry` | - | false | 失敗ページのみ再生成 |
 
-## 認証
+### 認証
 
 | 方式 | 設定 | 用途 |
 |---|---|---|
 | SSH | `git` のSSH鍵設定済み | デフォルト。PAT不要 |
 | PAT | `.env` に `GITHUB_TOKEN` を設定 | SSH未設定の環境向け |
 
-## 失敗ページのリトライ
+### 失敗ページのリトライ
 
 生成に失敗したページだけを再生成できます。
 
@@ -128,18 +275,18 @@ git add -A && git commit -m "Update wiki" && git push
 
 `wiki-output/` 内の `*Content generation failed*` を含むページと 200 バイト未満のページを検出し、既存のクローン済みリポジトリを使って再生成します。自動リトライ（最大3回）でも失敗した場合に使用してください。
 
-## ドキュメント生成方針
+### ドキュメント生成方針
 
 コードベースから以下のカテゴリのドキュメントを自動生成します。
 ページ数はリポジトリの規模に応じて動的に決定されます。
 
-### A. コードから確実に生成（事実ベース）
+#### A. コードから確実に生成（事実ベース）
 - システム概要、アーキテクチャ、API仕様、データモデル
 - ルーティング、状態管理、コンポーネント一覧
 - 設定・環境変数、ビルド・デプロイ、テスト構成
 - 認証・認可、エラーハンドリング、外部連携
 
-### B. コードパターンからの推論（高い確度）
+#### B. コードパターンからの推論（高い確度）
 - 処理フロー、セキュリティ設計、パフォーマンス考慮
 
 コードに根拠がないものは生成しません。
