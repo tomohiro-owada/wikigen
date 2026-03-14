@@ -205,6 +205,10 @@ Page count is dynamically determined based on repository complexity.
 
 Nothing is generated without code evidence. No speculation.
 
+### Acknowledgements
+
+This project was inspired by [DeepWiki-Open](https://github.com/AsyncFuncAI/deepwiki-open), an AI-powered wiki generator that uses RAG and embedding for documentation generation. wikigen takes a different approach — replacing the RAG/embedding pipeline with Claude Code's native tool use (Read, Grep, Glob, Bash) for direct source code access, eliminating the need for Docker, Ollama, or any embedding infrastructure.
+
 ### Claude Code Integration
 
 wikigen includes a `CLAUDE.md` skill file. When working in the wikigen directory, Claude Code can reference usage patterns and best practices automatically.
@@ -406,6 +410,10 @@ git add -A && git commit -m "Update wiki" && git push
 - 処理フロー、セキュリティ設計、パフォーマンス考慮
 
 コードに根拠がないものは生成しません。推測は一切行いません。
+
+### 謝辞
+
+本プロジェクトは [DeepWiki-Open](https://github.com/AsyncFuncAI/deepwiki-open)（RAG と embedding を用いた AI Wiki ジェネレーター）にインスパイアされて開発しました。wikigen は RAG/embedding パイプラインを Claude Code のネイティブツール（Read, Grep, Glob, Bash）による直接的なソースコードアクセスに置き換えることで、Docker・Ollama・embedding インフラを不要にしています。
 
 ### Claude Code 連携
 
