@@ -101,6 +101,15 @@ func claudeCall(claudePath, model string, repoDirs []string, systemPrompt, promp
 
 // ── Git Clone ──
 
+func getGHToken() string {
+	cmd := exec.Command("gh", "auth", "token")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func gitClone(repoURL, token, destDir string, useGH bool) error {
 	if _, err := os.Stat(filepath.Join(destDir, ".git")); err == nil {
 		cmd := exec.Command("git", "-C", destDir, "pull", "--ff-only")
@@ -109,11 +118,12 @@ func gitClone(repoURL, token, destDir string, useGH bool) error {
 		return cmd.Run()
 	}
 
-	if useGH {
-		cmd := exec.Command("gh", "repo", "clone", repoURL, destDir, "--", "--depth=1", "--single-branch")
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+	// If using gh, get token from gh auth and clone with git
+	if useGH && token == "" {
+		token = getGHToken()
+		if token == "" {
+			return fmt.Errorf("gh auth token failed. Run: gh auth login")
+		}
 	}
 
 	cloneURL := repoURL
