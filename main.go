@@ -94,10 +94,18 @@ func claudeCall(claudePath, model, repoDir, systemPrompt, prompt string) (string
 
 // ── Git Clone ──
 
-func gitClone(repoURL, token, destDir string) error {
+func gitClone(repoURL, token, destDir string, useGH bool) error {
 	if _, err := os.Stat(filepath.Join(destDir, ".git")); err == nil {
 		// Already cloned, pull latest
 		cmd := exec.Command("git", "-C", destDir, "pull", "--ff-only")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	if useGH {
+		// Use gh CLI (uses gh's own auth, no PAT needed)
+		cmd := exec.Command("gh", "repo", "clone", repoURL, destDir, "--", "--depth=1", "--single-branch")
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
@@ -396,7 +404,7 @@ func appendError(repoDir, msg string) {
 
 // ── Wiki Generation ──
 
-func generateWiki(claudePath, model, repo, token, language, outputDir, cloneDir string, pageParallel int, progress *Progress) error {
+func generateWiki(claudePath, model, repo, token, language, outputDir, cloneDir string, pageParallel int, useGH bool, progress *Progress) error {
 	repoURL := repo
 	if !strings.HasPrefix(repo, "http") {
 		repoURL = fmt.Sprintf("https://github.com/%s", repo)
@@ -413,7 +421,7 @@ func generateWiki(claudePath, model, repo, token, language, outputDir, cloneDir 
 	// Step 0: Clone repository
 	progress.set(short, "📥 cloning...")
 	repoDir := filepath.Join(cloneDir, fmt.Sprintf("%s_%s", owner, repoName))
-	if err := gitClone(repoURL, token, repoDir); err != nil {
+	if err := gitClone(repoURL, token, repoDir, useGH); err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}
 
@@ -514,6 +522,31 @@ func writeHomeAndSidebar(wikiDir, short, structureContent string, allPages []Wik
 
 // ── Env & Main ──
 
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envOrDefaultInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := fmt.Sscanf(v, "%d"); err == nil && n > 0 {
+			var i int
+			fmt.Sscan(v, &i)
+			return i
+		}
+	}
+	return fallback
+}
+
+func envOrDefaultBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		return v == "true" || v == "1" || v == "yes"
+	}
+	return fallback
+}
+
 func loadEnvFile() {
 	for _, path := range []string{".env", ".env.local"} {
 		data, err := os.ReadFile(path)
@@ -551,18 +584,20 @@ func main() {
 		pageParallel int
 		logFile      string
 		claudePath   string
+		useGH        bool
 	)
 
 	flag.StringVar(&reposFile, "f", "", "file containing repo list (one per line)")
 	flag.StringVar(&repos, "r", "", "comma-separated repo list (owner/repo)")
 	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub PAT (default: $GITHUB_TOKEN)")
-	flag.StringVar(&model, "model", os.Getenv("CLAUDE_MODEL"), "claude model (e.g., haiku, sonnet, opus)")
-	flag.StringVar(&language, "lang", "ja", "output language")
-	flag.StringVar(&outputDir, "o", "./wiki-output", "output directory for wiki files")
-	flag.StringVar(&cloneDir, "clone-dir", "./.repos", "directory for cloned repositories")
+	flag.StringVar(&model, "model", envOrDefault("CLAUDE_MODEL", ""), "claude model (e.g., haiku, sonnet, opus)")
+	flag.StringVar(&language, "lang", envOrDefault("WIKI_LANGUAGE", "ja"), "output language")
+	flag.StringVar(&outputDir, "o", envOrDefault("WIKI_OUTPUT_DIR", "./wiki-output"), "output directory for wiki files")
+	flag.StringVar(&cloneDir, "clone-dir", envOrDefault("WIKI_CLONE_DIR", "./.repos"), "directory for cloned repositories")
 	flag.StringVar(&claudePath, "claude", "claude", "path to claude binary")
-	flag.IntVar(&parallel, "p", 1, "number of repos to process in parallel")
-	flag.IntVar(&pageParallel, "pp", 3, "number of pages to generate in parallel per repo")
+	flag.IntVar(&parallel, "p", envOrDefaultInt("WIKI_PARALLEL", 1), "number of repos to process in parallel")
+	flag.IntVar(&pageParallel, "pp", envOrDefaultInt("WIKI_PAGE_PARALLEL", 3), "number of pages to generate in parallel per repo")
+	flag.BoolVar(&useGH, "gh", envOrDefaultBool("WIKI_USE_GH", false), "use gh CLI for cloning (no PAT needed)")
 	flag.StringVar(&logFile, "log", "", "log file path (default: stderr)")
 	flag.Parse()
 
@@ -635,7 +670,7 @@ func main() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := generateWiki(claudePath, model, r, token, language, outputDir, cloneDir, pageParallel, progress); err != nil {
+			if err := generateWiki(claudePath, model, r, token, language, outputDir, cloneDir, pageParallel, useGH, progress); err != nil {
 				log.Printf("[%s] ❌ %v", r, err)
 				progress.done(r)
 				mu.Lock()
