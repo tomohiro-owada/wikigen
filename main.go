@@ -73,7 +73,7 @@ type RepoEntry struct {
 
 // ── Claude CLI ──
 
-func claudeCall(claudePath, model string, repoDirs []string, systemPrompt, prompt string) (string, error) {
+func claudeCall(claudePath, model string, repoDirs []string, systemPrompt, prompt, workDir string) (string, error) {
 	args := []string{"-p", "--output-format", "text", "--dangerously-skip-permissions"}
 	if model != "" {
 		args = append(args, "--model", model)
@@ -87,6 +87,9 @@ func claudeCall(claudePath, model string, repoDirs []string, systemPrompt, promp
 
 	cmd := exec.Command(claudePath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -444,10 +447,16 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 		repoDirs = append(repoDirs, repoDir)
 	}
 
+	// Create output directory
+	wikiDir := filepath.Join(outputDir, projectName)
+	if err := os.MkdirAll(wikiDir, 0755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+
 	// Step 1: Determine wiki structure
 	progress.set(projectName, "📋 structure...")
 
-	structureContent, err := claudeCall(claudePath, model, repoDirs, xmlSystemPrompt, structurePrompt(projectName, repos, language))
+	structureContent, err := claudeCall(claudePath, model, repoDirs, xmlSystemPrompt, structurePrompt(projectName, repos, language), wikiDir)
 	if err != nil {
 		return fmt.Errorf("structure: %w", err)
 	}
@@ -458,12 +467,6 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 		return fmt.Errorf("no pages found in structure")
 	}
 	log.Printf("[%s] Structure: %d pages", projectName, len(pages))
-
-	// Create output directory
-	wikiDir := filepath.Join(outputDir, projectName)
-	if err := os.MkdirAll(wikiDir, 0755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
 
 	var allPages []WikiPage
 	for _, p := range pages {
@@ -488,7 +491,7 @@ func generateWiki(claudePath, model string, projectName string, repos []string, 
 			page := &allPages[idx]
 			progress.set(projectName, fmt.Sprintf("📝 %d/%d %s", atomic.LoadInt32(&pageDone)+1, len(allPages), page.Title))
 
-			content, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(*page, allPages, projectName, repos, language))
+			content, err := claudeCall(claudePath, model, repoDirs, "", pagePrompt(*page, allPages, projectName, repos, language), wikiDir)
 			if err != nil {
 				log.Printf("[%s] page %s failed: %v", projectName, page.Title, err)
 				content = fmt.Sprintf("*Content generation failed: %v*", err)
