@@ -75,12 +75,12 @@ Goのワンバイナリで、やることはシンプル：
 
 ```
 # 単独wiki
-tomohiro-owada/gmn
+owner/repo
 
 # マルチリポ（1つのwikiにまとめる）
-mogecheck:mortgagefss/mogecheck-front-nuxt
-mogecheck:mortgagefss/mogecheck-biz
-mogecheck:mortgagefss/mogecheck-c
+myproject:owner/frontend
+myproject:owner/backend
+myproject:owner/shared
 ```
 
 マルチリポ対応が地味に便利。フロントエンドとバックエンドのリポジトリが分かれてても、1つのwikiに「API呼び出しフロー」みたいな横断ドキュメントが生成される。
