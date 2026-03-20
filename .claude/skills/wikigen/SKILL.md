@@ -22,6 +22,10 @@ go build -o wikigen .
 # Generate wiki
 ./wikigen owner/repo
 
+# Local directory (no clone needed)
+./wikigen /path/to/local/repo
+./wikigen .
+
 # Batch from file
 ./wikigen -f repos.txt
 
@@ -40,17 +44,22 @@ go build -o wikigen .
 | `-lang` | ja | Output language |
 | `-dry-run` | false | Structure only, no generation |
 | `-json` | false | JSON output to stdout |
+| `-local` | - | Local directory (skip clone) |
 | `-retry` | false | Retry failed pages only |
 
 ## repos.txt Format
 
 ```
-# Standalone
+# GitHub repos (cloned)
 owner/repo
+
+# Local directories (no clone)
+/path/to/local/repo
+./relative/path
 
 # Multi-repo (grouped into one wiki)
 project:owner/repo1
-project:owner/repo2
+project:/path/to/local
 ```
 
 ## Environment Variables (.env)

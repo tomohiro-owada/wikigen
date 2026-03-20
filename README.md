@@ -28,21 +28,30 @@ wikigen → git clone (SSH) → claude -p --add-dir ./repo
 
 No Docker, Ollama, or embedding required. Single binary, zero infrastructure.
 
-### Prerequisites
+### Installation
 
-- Go 1.22+
-- git (SSH key configured, or PAT)
-- `claude` CLI installed and authenticated (`claude -p "hello"` should work)
+**Download binary** (recommended):
 
-### Setup
+```bash
+# Download the latest release for your platform
+# https://github.com/tomohiro-owada/wikigen/releases
+curl -L https://github.com/tomohiro-owada/wikigen/releases/latest/download/wikigen-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') -o wikigen
+chmod +x wikigen
+sudo mv wikigen /usr/local/bin/
+```
+
+**Or build from source**:
 
 ```bash
 git clone https://github.com/tomohiro-owada/wikigen.git
 cd wikigen
-cp .env.example .env
-# Edit .env as needed
 go build -o wikigen .
 ```
+
+### Prerequisites
+
+- git (SSH key configured, or PAT)
+- `claude` CLI installed and authenticated (`claude -p "hello"` should work)
 
 ### Quick Start
 
@@ -52,6 +61,9 @@ go build -o wikigen .
 
 # Generate wiki
 ./wikigen owner/repo
+
+# Local directory (no clone needed)
+./wikigen /path/to/local/repo
 
 # Batch from file with parallelism
 ./wikigen -f repos.txt -p 2 -pp 5
@@ -69,8 +81,12 @@ go build -o wikigen .
 # Single repository
 ./wikigen owner/repo
 
-# Multiple repositories
-./wikigen owner/repo1 owner/repo2
+# Local directory
+./wikigen /path/to/local/repo
+./wikigen .
+
+# Multiple repositories (remote and local can be mixed)
+./wikigen owner/repo1 /path/to/local/repo
 
 # Batch from file
 ./wikigen -f repos.txt
@@ -97,14 +113,18 @@ go build -o wikigen .
 ### repos.txt Format
 
 ```
-# Standalone wiki (one wiki per repo)
+# GitHub repos (cloned automatically)
 owner/repo1
 owner/repo2
+
+# Local directories (no clone needed)
+/path/to/local/repo
+./relative/path
 
 # Multi-repo wiki (multiple repos merged into one wiki)
 myproject:owner/frontend-repo
 myproject:owner/backend-repo
-myproject:owner/shared-repo
+myproject:/path/to/local/repo    # local dirs can be grouped too
 ```
 
 Multi-repo wikis generate cross-repository documentation — architecture pages that span all repos, showing how services interact.
@@ -144,6 +164,7 @@ All options can be set via `.env` file. CLI flags take precedence over env vars.
 | `-token` | `GITHUB_TOKEN` | (empty=SSH) | GitHub PAT. If empty, SSH is used |
 | `-model` | `CLAUDE_MODEL` | - | Claude model (haiku, sonnet, opus) |
 | `-o` | `WIKI_OUTPUT_DIR` | `./wiki-output` | Output directory |
+| `-local` | - | - | Local directory (skip clone) |
 | `-clone-dir` | `WIKI_CLONE_DIR` | `./.repos` | Clone directory |
 | `-p` | `WIKI_PARALLEL` | `1` | Parallel repos |
 | `-pp` | `WIKI_PAGE_PARALLEL` | `3` | Parallel pages per repo |
@@ -163,8 +184,9 @@ All options can be set via `.env` file. CLI flags take precedence over env vars.
 ### Input Validation
 
 wikigen validates all repository inputs:
-- Must match `owner/repo` format
-- Rejects path traversal (`..`)
+- Remote repos must match `owner/repo` format
+- Local paths must point to existing directories
+- Rejects path traversal (`..`) in remote repo names
 - Rejects shell injection characters (`;`, `&`, `|`, etc.)
 
 ### Error Handling & Retry
@@ -305,21 +327,30 @@ wikigen → git clone (SSH) → claude -p --add-dir ./repo
 
 Docker、Ollama、embedding 一切不要。ワンバイナリ、インフラ不要。
 
-### 前提条件
+### インストール
 
-- Go 1.22+
-- git（SSH認証設定済み、または PAT）
-- `claude` CLI がインストール・認証済み（`claude -p "hello"` が動くこと）
+**バイナリをダウンロード**（推奨）:
 
-### セットアップ
+```bash
+# 最新リリースをダウンロード
+# https://github.com/tomohiro-owada/wikigen/releases
+curl -L https://github.com/tomohiro-owada/wikigen/releases/latest/download/wikigen-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') -o wikigen
+chmod +x wikigen
+sudo mv wikigen /usr/local/bin/
+```
+
+**ソースからビルド**:
 
 ```bash
 git clone https://github.com/tomohiro-owada/wikigen.git
 cd wikigen
-cp .env.example .env
-# 必要に応じて .env を編集
 go build -o wikigen .
 ```
+
+### 前提条件
+
+- git（SSH認証設定済み、または PAT）
+- `claude` CLI がインストール・認証済み（`claude -p "hello"` が動くこと）
 
 ### クイックスタート
 
@@ -329,6 +360,9 @@ go build -o wikigen .
 
 # wiki 生成
 ./wikigen owner/repo
+
+# ローカルディレクトリ（clone不要）
+./wikigen /path/to/local/repo
 
 # 一括生成（並列）
 ./wikigen -f repos.txt -p 2 -pp 5
@@ -346,8 +380,12 @@ go build -o wikigen .
 # 単一リポジトリ
 ./wikigen owner/repo
 
-# 複数リポジトリ
-./wikigen owner/repo1 owner/repo2
+# ローカルディレクトリ
+./wikigen /path/to/local/repo
+./wikigen .
+
+# 複数（リモートとローカル混在OK）
+./wikigen owner/repo1 /path/to/local/repo
 
 # ファイルから一括
 ./wikigen -f repos.txt
@@ -374,14 +412,18 @@ go build -o wikigen .
 ### repos.txt の書式
 
 ```
-# 単独wiki（リポジトリごとに1つのwiki）
+# GitHub リポジトリ（自動clone）
 owner/repo1
 owner/repo2
+
+# ローカルディレクトリ（clone不要）
+/path/to/local/repo
+./relative/path
 
 # マルチリポwiki（複数リポジトリを1つのwikiにまとめる）
 myproject:owner/frontend-repo
 myproject:owner/backend-repo
-myproject:owner/shared-repo
+myproject:/path/to/local/repo    # ローカルもグループ化可能
 ```
 
 マルチリポwikiではリポジトリ間の連携を含む横断的なドキュメントが生成されます。
@@ -421,6 +463,7 @@ git add -A && git commit -m "Update wiki" && git push
 | `-token` | `GITHUB_TOKEN` | (空=SSH) | GitHub PAT。未設定時はSSHでclone |
 | `-model` | `CLAUDE_MODEL` | - | Claude モデル (haiku, sonnet, opus) |
 | `-o` | `WIKI_OUTPUT_DIR` | `./wiki-output` | 出力ディレクトリ |
+| `-local` | - | - | ローカルディレクトリ（clone不要） |
 | `-clone-dir` | `WIKI_CLONE_DIR` | `./.repos` | clone先ディレクトリ |
 | `-p` | `WIKI_PARALLEL` | `1` | リポジトリ並列数 |
 | `-pp` | `WIKI_PAGE_PARALLEL` | `3` | ページ並列数（リポジトリごと） |
@@ -440,8 +483,9 @@ git add -A && git commit -m "Update wiki" && git push
 ### 入力バリデーション
 
 全てのリポジトリ入力を検証：
-- `owner/repo` 形式のみ受け付け
-- パストラバーサル（`..`）を拒否
+- リモートリポは `owner/repo` 形式のみ受け付け
+- ローカルパスは既存ディレクトリであることを確認
+- パストラバーサル（`..`）を拒否（リモートリポ名）
 - シェルインジェクション文字（`;`, `&`, `|` 等）を拒否
 
 ### エラー処理とリトライ
